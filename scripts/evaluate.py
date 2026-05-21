@@ -74,6 +74,12 @@ def main():
         help="Dataset directory (default: models/datasets/trec_dl_2019)",
     )
     ap.add_argument(
+        "--download_mode",
+        default="auto",
+        choices=["auto", "never"],
+        help="auto=download missing files; never=error if required files are missing",
+    )
+    ap.add_argument(
         "--queries_path",
         default=None,
         help="Optional path to msmarco-test2019-queries.tsv(.gz). If omitted, uses data_dir copy.",
@@ -95,15 +101,29 @@ def main():
     top1000 = data_dir / "msmarco-passagetest2019-top1000.tsv.gz"
 
     download_if_missing("https://trec.nist.gov/data/deep/2019qrels-pass.txt", qrels)
-    if args.queries_path is None:
+    if args.download_mode == "never" and not qrels.exists():
+        raise FileNotFoundError(f"Missing {qrels}. Download it first or run with --download_mode auto")
+    if args.download_mode == "auto":
+        download_if_missing("https://trec.nist.gov/data/deep/2019qrels-pass.txt", qrels)
+
+    if args.queries_path is None and args.download_mode == "auto":
         download_if_missing(
             "https://msmarco.z22.web.core.windows.net/msmarcoranking/msmarco-test2019-queries.tsv.gz",
             queries_tsv_gz,
         )
-    download_if_missing(
-        "https://msmarco.z22.web.core.windows.net/msmarcoranking/msmarco-passagetest2019-top1000.tsv.gz",
-        top1000,
-    )
+    elif args.queries_path is None and args.download_mode == "never" and not queries_tsv_gz.exists():
+        raise FileNotFoundError(
+            f"Missing {queries_tsv_gz}. Download it first or run with --download_mode auto"
+        )
+    if args.download_mode == "auto":
+        download_if_missing(
+            "https://msmarco.z22.web.core.windows.net/msmarcoranking/msmarco-passagetest2019-top1000.tsv.gz",
+            top1000,
+        )
+    elif not top1000.exists():
+        raise FileNotFoundError(
+            f"Missing {top1000}. Download it first or run with --download_mode auto"
+        )
 
     # Load qrels
     relevant_docs = defaultdict(lambda: defaultdict(int))

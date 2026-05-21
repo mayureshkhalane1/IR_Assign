@@ -178,6 +178,12 @@ def main():
     ap.add_argument("--num_max_dev_negatives", type=int, default=200)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
+        "--download_mode",
+        default="auto",
+        choices=["auto", "never"],
+        help="auto=download missing files; never=error if required files are missing",
+    )
+    ap.add_argument(
         "--use_amp",
         default="auto",
         choices=["auto", "true", "false"],
@@ -209,6 +215,10 @@ def main():
     if not collection_tsv.exists():
         tar_path = data_dir / "collection.tar.gz"
         if not tar_path.exists():
+            if args.download_mode == "never":
+                raise FileNotFoundError(
+                    f"Missing {tar_path}. Download it first or run with --download_mode auto"
+                )
             logging.info("Downloading collection.tar.gz")
             download_file(
                 "https://msmarco.z22.web.core.windows.net/msmarcoranking/collection.tar.gz",
@@ -238,7 +248,14 @@ def main():
         )
 
     # ---------- Queries ----------
-    qpath = ensure_msmarco_queries(data_dir)
+    if args.download_mode == "never":
+        qpath = data_dir / "queries.train.tsv"
+        if not qpath.exists():
+            raise FileNotFoundError(
+                f"Missing {qpath}. Ensure queries are extracted or run with --download_mode auto"
+            )
+    else:
+        qpath = ensure_msmarco_queries(data_dir)
     queries: dict[str, str] = {}
     logging.info("Reading %s", qpath.name)
     with open(qpath, "r", encoding="utf-8") as f:
@@ -252,6 +269,10 @@ def main():
 
     train_eval_path = data_dir / "msmarco-qidpidtriples.rnd-shuf.train-eval.tsv.gz"
     if not train_eval_path.exists():
+        if args.download_mode == "never":
+            raise FileNotFoundError(
+                f"Missing {train_eval_path}. Download it first or run with --download_mode auto"
+            )
         logging.info("Downloading %s", train_eval_path.name)
         download_file(
             "https://sbert.net/datasets/msmarco-qidpidtriples.rnd-shuf.train-eval.tsv.gz",
@@ -298,6 +319,10 @@ def main():
     # ---------- Training samples ----------
     train_path = data_dir / "msmarco-qidpidtriples.rnd-shuf.train.tsv.gz"
     if not train_path.exists():
+        if args.download_mode == "never":
+            raise FileNotFoundError(
+                f"Missing {train_path}. Download it first or run with --download_mode auto"
+            )
         logging.info("Downloading %s", train_path.name)
         download_file(
             "https://sbert.net/datasets/msmarco-qidpidtriples.rnd-shuf.train.tsv.gz",
