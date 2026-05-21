@@ -178,6 +178,17 @@ def main():
     ap.add_argument("--num_max_dev_negatives", type=int, default=200)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument(
+        "--corpus_mode",
+        default="auto",
+        choices=["auto", "full", "subset"],
+        help=(
+            "How to load MSMARCO collection.tsv. "
+            "full=load entire corpus into RAM (fast but very memory heavy). "
+            "subset=load only passages referenced by dev+train triples (recommended for Mac). "
+            "auto=subset on CPU/MPS, full on CUDA."
+        ),
+    )
+    ap.add_argument(
         "--download_mode",
         default="auto",
         choices=["auto", "never"],
@@ -199,6 +210,18 @@ def main():
     logging.info("Loading model: %s", args.model_name)
     model = CrossEncoder(args.model_name, num_labels=1, max_length=args.max_length)
 
+    # Heuristic defaults for Apple Silicon: full corpus (8.8M passages) will OOM on 24GB.
+    if args.corpus_mode == "auto":
+        corpus_mode = "full" if torch.cuda.is_available() else "subset"
+    else:
+        corpus_mode = args.corpus_mode
+
+    if torch.backends.mps.is_available() and corpus_mode == "full":
+        logging.warning(
+            "MPS detected but corpus_mode=full. This will likely OOM on 24GB. "
+            "Consider --corpus_mode subset."
+        )
+
     # AMP: accelerate's fp16 mixed precision is CUDA-only. On Apple MPS it raises.
     if args.use_amp == "auto":
         use_amp = torch.cuda.is_available()
@@ -209,8 +232,7 @@ def main():
         logging.warning("Forcing use_amp=False because CUDA is not available.")
         use_amp = False
 
-    # ---------- Download / load MSMARCO corpus ----------
-    corpus: dict[str, str] = {}
+    # ---------- Ensure MSMARCO corpus exists (do not load yet) ----------
     collection_tsv = data_dir / "collection.tsv"
     if not collection_tsv.exists():
         tar_path = data_dir / "collection.tar.gz"
@@ -234,18 +256,8 @@ def main():
         finally:
             _release_lock(extract_lock)
 
-    logging.info("Reading collection.tsv")
-    with open(collection_tsv, "r", encoding="utf-8") as f:
-        for line in f:
-            pid, passage = line.rstrip("\n").split("\t", 1)
-            corpus[pid] = passage
-
-    # Integrity check: MSMARCO passage collection has ~8.8M passages.
-    if len(corpus) < 8_000_000:
-        raise RuntimeError(
-            f"collection.tsv seems incomplete (loaded {len(corpus)} passages). "
-            f"Delete {collection_tsv} and {data_dir / 'collection.tar.gz'} then re-run."
-        )
+    # NOTE: We intentionally do NOT load collection.tsv into RAM here.
+    # On many laptops (e.g., 24GB MacBooks) loading ~8.8M passages will OOM.
 
     # ---------- Queries ----------
     if args.download_mode == "never":
@@ -263,8 +275,11 @@ def main():
             qid, query = line.rstrip("\n").split("\t", 1)
             queries[qid] = query
 
-    # ---------- Build dev samples from train-eval triples ----------
-    train_samples: list[InputExample] = []
+    # ---------- Build dev samples + determine which passage IDs we need ----------
+    # We first collect passage IDs referenced by the dev set and training samples.
+    needed_pids: set[str] = set()
+
+    # We'll build dev_samples as ids first, and convert to texts after loading the corpus subset.
     dev_samples: dict[str, dict] = {}
 
     train_eval_path = data_dir / "msmarco-qidpidtriples.rnd-shuf.train-eval.tsv.gz"
@@ -293,30 +308,17 @@ def main():
                 }
 
             if qid in dev_samples:
-                if pos_id in corpus:
-                    dev_samples[qid]["positive"].add(corpus[pos_id])
-                else:
-                    missing_in_corpus += 1
+                dev_samples[qid]["positive"].add(pos_id)
+                needed_pids.add(pos_id)
 
                 if len(dev_samples[qid]["negative"]) < args.num_max_dev_negatives:
-                    if neg_id in corpus:
-                        dev_samples[qid]["negative"].add(corpus[neg_id])
-                    else:
-                        missing_in_corpus += 1
+                    dev_samples[qid]["negative"].add(neg_id)
+                    needed_pids.add(neg_id)
 
-    if missing_in_corpus:
-        logging.warning(
-            "Missing %d passage ids in corpus while building dev set (skipped).",
-            missing_in_corpus,
-        )
+    # (We no longer check corpus membership here; we will check after we load corpus subset.)
 
-    # CERerankingEvaluator expects lists (it does `positive + negative`).
-    # We used sets during construction to deduplicate; convert now.
-    for _qid in list(dev_samples.keys()):
-        dev_samples[_qid]["positive"] = list(dev_samples[_qid]["positive"])
-        dev_samples[_qid]["negative"] = list(dev_samples[_qid]["negative"])
-
-    # ---------- Training samples ----------
+    # ---------- Training samples (store passage IDs for now) ----------
+    train_samples_pid: list[tuple[str, str, int]] = []  # (qid, pid, label)
     train_path = data_dir / "msmarco-qidpidtriples.rnd-shuf.train.tsv.gz"
     if not train_path.exists():
         if args.download_mode == "never":
@@ -339,27 +341,70 @@ def main():
             if qid in dev_samples:
                 continue
 
-            query = queries[qid]
             if (cnt % (args.pos_neg_ratio + 1)) == 0:
-                if pos_id not in corpus:
-                    missing_train += 1
-                    continue
-                passage = corpus[pos_id]
+                pid = pos_id
                 label = 1
             else:
-                if neg_id not in corpus:
-                    missing_train += 1
-                    continue
-                passage = corpus[neg_id]
+                pid = neg_id
                 label = 0
 
-            train_samples.append(InputExample(texts=[query, passage], label=label))
+            needed_pids.add(pid)
+            train_samples_pid.append((qid, pid, label))
             cnt += 1
             if cnt >= args.max_train_samples:
                 break
 
     if missing_train:
         logging.warning("Skipped %d training triples due to missing passage ids.", missing_train)
+
+    # ---------- Load corpus texts ----------
+    corpus: dict[str, str] = {}
+    if corpus_mode == "full":
+        logging.info("Loading FULL collection.tsv into RAM (this can be huge)")
+        with open(collection_tsv, "r", encoding="utf-8") as f:
+            for line in f:
+                pid, passage = line.rstrip("\n").split("\t", 1)
+                corpus[pid] = passage
+        if len(corpus) < 8_000_000:
+            raise RuntimeError(
+                f"collection.tsv seems incomplete (loaded {len(corpus)} passages). "
+                f"Delete {collection_tsv} and {data_dir / 'collection.tar.gz'} then re-run."
+            )
+    else:
+        logging.info(
+            "Loading SUBSET of collection.tsv: %d needed passage IDs (Mac-friendly)",
+            len(needed_pids),
+        )
+        with open(collection_tsv, "r", encoding="utf-8") as f:
+            for line in f:
+                pid, passage = line.rstrip("\n").split("\t", 1)
+                if pid in needed_pids:
+                    corpus[pid] = passage
+
+        missing = len(needed_pids) - len(corpus)
+        if missing:
+            logging.warning(
+                "Missing %d/%d needed passage IDs in collection.tsv. They will be skipped.",
+                missing,
+                len(needed_pids),
+            )
+
+    # ---------- Materialize train/dev samples into text now that corpus is available ----------
+    train_samples: list[InputExample] = []
+    for qid, pid, label in train_samples_pid:
+        q = queries.get(qid)
+        p = corpus.get(pid)
+        if q is None or p is None:
+            missing_train += 1
+            continue
+        train_samples.append(InputExample(texts=[q, p], label=label))
+
+    # CERerankingEvaluator expects lists of texts (it does `positive + negative`).
+    for _qid in list(dev_samples.keys()):
+        pos_txt = [corpus[pid] for pid in dev_samples[_qid]["positive"] if pid in corpus]
+        neg_txt = [corpus[pid] for pid in dev_samples[_qid]["negative"] if pid in corpus]
+        dev_samples[_qid]["positive"] = pos_txt
+        dev_samples[_qid]["negative"] = neg_txt
 
     train_dataloader = DataLoader(train_samples, shuffle=True, batch_size=args.train_batch_size)
 
