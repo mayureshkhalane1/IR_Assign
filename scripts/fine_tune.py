@@ -22,6 +22,7 @@ import gzip
 import logging
 import os
 import tarfile
+import warnings
 from datetime import datetime
 from pathlib import Path
 
@@ -33,6 +34,19 @@ from sentence_transformers import InputExample
 from sentence_transformers.cross_encoder import CrossEncoder
 from sentence_transformers.cross_encoder.evaluation import CERerankingEvaluator
 from torch.utils.data import DataLoader
+
+
+# Silence common Mac Python warning: urllib3 v2 expects OpenSSL, but many system Pythons use LibreSSL.
+# This does not affect our local-file training workflow.
+try:
+    from urllib3.exceptions import NotOpenSSLWarning  # type: ignore
+
+    warnings.filterwarnings("ignore", category=NotOpenSSLWarning)
+except Exception:
+    pass
+
+# Prevent Rust tokenizers from spawning many threads and occasionally printing mutex lock diagnostics.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def setup_logger():
