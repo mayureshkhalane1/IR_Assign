@@ -74,6 +74,12 @@ def main():
         help="Dataset directory (default: models/datasets/trec_dl_2019)",
     )
     ap.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cuda", "cpu", "mps"],
+        help="Device to run on. Use 'cuda' to force NVIDIA GPU.",
+    )
+    ap.add_argument(
         "--download_mode",
         default="auto",
         choices=["auto", "never"],
@@ -88,12 +94,35 @@ def main():
     args = ap.parse_args()
 
     model_dir = Path(args.model_dir)
+
+    # ---------- Device selection ----------
+    if args.device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    else:
+        device = args.device
+
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device cuda was set but torch.cuda.is_available() is False")
+        torch.cuda.set_device(0)
+        logging.info("Using CUDA GPU: %s", torch.cuda.get_device_name(0))
+    elif device == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("--device mps was set but MPS is not available")
+        logging.info("Using Apple MPS")
+    else:
+        logging.info("Using CPU")
     out_run = Path(args.output_run)
     data_dir = Path(args.data_dir)
     data_dir.mkdir(parents=True, exist_ok=True)
 
     logging.info("Loading model from %s", model_dir)
-    model = CrossEncoder(str(model_dir))
+    model = CrossEncoder(str(model_dir), device=device)
 
     # Files
     qrels = data_dir / "2019qrels-pass.txt"

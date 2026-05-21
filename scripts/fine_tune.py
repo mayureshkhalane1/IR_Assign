@@ -209,6 +209,12 @@ def main():
         help="auto=download missing files; never=error if required files are missing",
     )
     ap.add_argument(
+        "--device",
+        default="auto",
+        choices=["auto", "cuda", "cpu", "mps"],
+        help="Device to run on. Use 'cuda' to force NVIDIA GPU.",
+    )
+    ap.add_argument(
         "--use_amp",
         default="auto",
         choices=["auto", "true", "false"],
@@ -221,12 +227,37 @@ def main():
     out_dir = Path(args.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    # ---------- Device selection ----------
+    if args.device == "auto":
+        if torch.cuda.is_available():
+            device = "cuda"
+        elif torch.backends.mps.is_available():
+            device = "mps"
+        else:
+            device = "cpu"
+    else:
+        device = args.device
+
+    if device == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device cuda was set but torch.cuda.is_available() is False")
+        # Ensure we are actually on GPU:0 (common single-GPU servers)
+        torch.cuda.set_device(0)
+        gpu_name = torch.cuda.get_device_name(0)
+        logging.info("Using CUDA GPU: %s", gpu_name)
+    elif device == "mps":
+        if not torch.backends.mps.is_available():
+            raise RuntimeError("--device mps was set but MPS is not available")
+        logging.info("Using Apple MPS")
+    else:
+        logging.info("Using CPU")
+
     logging.info("Loading model: %s", args.model_name)
-    model = CrossEncoder(args.model_name, num_labels=1, max_length=args.max_length)
+    model = CrossEncoder(args.model_name, num_labels=1, max_length=args.max_length, device=device)
 
     # Heuristic defaults for Apple Silicon: full corpus (8.8M passages) will OOM on 24GB.
     if args.corpus_mode == "auto":
-        corpus_mode = "full" if torch.cuda.is_available() else "subset"
+        corpus_mode = "full" if device == "cuda" else "subset"
     else:
         corpus_mode = args.corpus_mode
 
