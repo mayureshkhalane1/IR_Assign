@@ -24,6 +24,7 @@ import numpy as np
 import pytrec_eval
 import requests
 import tqdm
+import torch
 from sentence_transformers.cross_encoder import CrossEncoder
 
 

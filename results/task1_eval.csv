@@ -1,0 +1,4 @@
+model,steps_1h,ndcg@10,recall@100,map@1000
+MiniLM-L-2-v2,35000,0.6721,0.4988,0.4339
+TinyBERT-L-2-v2,95000,0.6917,0.5052,0.4553
+DistilRoBERTa-base,11000,0.5463,0.4733,0.3968
