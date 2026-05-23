@@ -7,6 +7,7 @@
 \usepackage{siunitx}
 \usepackage{caption}
 \usepackage{subcaption}
+\usepackage{enumitem}
 
 \title{Information Retrieval Final Assignment\\Cross-Encoder Re-ranking, Fusion, and Query Expansion}
 \author{\textbf{Student:} Mayuresh Khalane \\\textbf{Course:} Information Retrieval}
@@ -15,20 +16,56 @@
 \begin{document}
 \maketitle
 
-\section{Experimental Setup}
-We fine-tuned three cross-encoder re-rankers on the MSMARCO passage re-ranking dataset for approximately one hour each, following the provided assignment notebooks. We then evaluated the fine-tuned checkpoints on the 43 TREC Deep Learning (DL) 2019 queries using the official top-1000 candidate set and report NDCG@10, Recall@100, and MAP@1000.
+\begin{abstract}
+This report studies cross-encoder re-ranking for passage retrieval. We fine-tune three cross-encoders on MSMARCO, evaluate them on TREC DL'19 (43 queries) using NDCG@10, Recall@100, and MAP@1000, and prepare a reproducible pipeline for run fusion (ranx) and optional query expansion with a local LLM (Ollama).
+\end{abstract}
 
-\paragraph{Models.}
-\begin{itemize}
+\section{Introduction}
+Neural re-rankers are a standard component of modern retrieval systems: a fast first-stage retriever produces a candidate set (e.g., top-1000), and a more expensive model re-scores these candidates to improve ranking quality. Cross-encoders are strong re-rankers because they jointly encode the query and passage, but they are computationally heavier than bi-encoders.
+
+\subsection{Motivation}
+This assignment provides hands-on experience with: (i) fine-tuning cross-encoders on MSMARCO, (ii) evaluating on a standard benchmark (TREC DL'19), and (iii) improving results via rank fusion and (optionally) query expansion.
+
+\section{Background}
+\subsection{Cross-encoder re-ranking}
+A cross-encoder takes a query--passage pair as input and outputs a relevance score. It is typically used to re-rank a fixed candidate set.
+
+\subsection{Rank fusion}
+Fusion combines multiple ranked lists into a single ranking. Methods such as CombSUM, CombMNZ, Borda, and Reciprocal Rank Fusion (RRF) can improve robustness by leveraging complementary strengths of different models.
+
+\subsection{LLM-based query expansion (optional)}
+Query expansion aims to rewrite or extend a query with additional terms. Prompting an LLM can generate expansions, and pseudo-relevance feedback (PRF) can supply top-ranked passages as additional context.
+
+\section{Experimental Setup}
+\subsection{Datasets}
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Training:} MSMARCO passage re-ranking.
+  \item \textbf{Evaluation:} TREC Deep Learning 2019 (43 queries) with the official candidate set and qrels.
+\end{itemize}
+
+\subsection{Models}
+We fine-tune the following models for approximately one hour each:
+\begin{itemize}[leftmargin=*]
   \item \texttt{cross-encoder/ms-marco-MiniLM-L-2-v2}
   \item \texttt{cross-encoder/ms-marco-TinyBERT-L-2-v2}
   \item \texttt{distilroberta-base}
 \end{itemize}
 
-\paragraph{Metrics.} We report NDCG@10, Recall@100, and MAP@1000 on TREC DL'19.
+\subsection{Metrics}
+We report NDCG@10, Recall@100, and MAP@1000 on TREC DL'19.
 
-\section{Task 1: Fine-tuning and Evaluation Results}
-Table~\ref{tab:task1} shows the evaluation results for the three fine-tuned models. The ``Steps'' column reports the last observed training step around the one-hour mark (as requested in the assignment).
+\subsection{Reproducibility}
+All steps are executable as Python scripts (no notebooks required). Main entry points:
+\begin{itemize}[leftmargin=*]
+  \item Fine-tuning: \texttt{scripts/fine\_tune.py}
+  \item Evaluation: \texttt{scripts/evaluate.py}
+  \item Fusion (Tasks 2--3): \texttt{scripts/fuse\_and\_eval.py}
+  \item Query expansion (Tasks 4--5): \texttt{scripts/run\_query\_expansion\_experiments.py}
+\end{itemize}
+
+\section{Experiments and Results}
+\subsection{Task 1: Fine-tuning and Evaluation}
+Table~\ref{tab:task1} reports the effectiveness of each fine-tuned model on TREC DL'19. The ``Steps'' column records the last observed training step around the one-hour training budget.
 
 \begin{table}[t]
 \centering
@@ -43,18 +80,14 @@ TinyBERT-L-2-v2    & 95000 & 0.6917 & 0.5052 & 0.4553 \\
 DistilRoBERTa-base & 11000 & 0.5463 & 0.4733 & 0.3968 \\
 \bottomrule
 \end{tabular}
-\caption{Task 1 results on TREC DL'19 (43 queries) for the three fine-tuned cross-encoder re-rankers.}
+\caption{Task 1 results on TREC DL'19 (43 queries) for three fine-tuned cross-encoder re-rankers.}
 \label{tab:task1}
 \end{table}
 
-\subsection{Discussion}
-Overall, the TinyBERT-L-2-v2 checkpoint achieved the strongest effectiveness across all reported metrics, followed closely by MiniLM-L-2-v2. DistilRoBERTa underperformed the other two models on this test set.
+\paragraph{Discussion.}
+TinyBERT-L-2-v2 achieves the best effectiveness across all metrics, with MiniLM-L-2-v2 close behind. DistilRoBERTa lags behind the MSMARCO-pretrained cross-encoders under the fixed one-hour training budget. One likely reason is that the MS MARCO cross-encoder checkpoints are already specialized for relevance scoring, while DistilRoBERTa starts from a general-purpose LM initialization and may require more optimization time and/or tuning to reach comparable performance.
 
-A plausible explanation is that the MSMARCO-tuned MiniLM and TinyBERT checkpoints are already well-aligned with passage re-ranking, and fine-tuning further adapts them to the pairwise preference signal in MSMARCO. DistilRoBERTa starts from a general-purpose language model initialization, so for a fixed one-hour budget it may not converge as well as the already task-adapted MS MARCO cross-encoders.
-
-Although TinyBERT is best here, this does not guarantee it will be best for all unseen queries. The differences between models can depend on query type, the candidate generation stage, and distributional shift between MSMARCO training data and TREC DL queries.
-
-Finally, a practical limitation is efficiency: higher-capacity models typically provide better ranking signals but at greater latency. In real systems, the best choice depends on both effectiveness and computational constraints.
+These results should not be over-generalized: performance can vary by query type and dataset distribution shift, and a model that wins on this benchmark may not dominate for all unseen queries.
 
 \begin{figure}[t]
 \centering
@@ -82,29 +115,23 @@ Finally, a practical limitation is efficiency: higher-capacity models typically 
   \includegraphics[width=\linewidth]{figures/task1_steps.pdf}
   \caption{Training steps ($\approx$1h)}
 \end{subfigure}
-\caption{Task 1 results summary.}
+\caption{Task 1 summary plots.}
 \label{fig:task1_plots}
 \end{figure}
 
-\section{Task 2 and 3: Fusion with ranx (Work Plan)}
-We provide a fully script-based pipeline for Tasks 2 and 3 using \texttt{ranx}. Given the three TREC run files produced in Task 1, we can fuse the runs with five fusion methods (Task 2), then select the best fusion method and apply it to all 2-run combinations (Task 3).
+\subsection{Task 2: Fusion of Three Runs (Placeholder)}
+\textit{To be completed:} Fuse the three Task 1 run files using five fusion methods from \texttt{ranx} and report NDCG@10, Recall@100, and MAP@1000 in a table. Include a short discussion comparing methods.
 
-\paragraph{Note.} In our workflow, these tasks are executed by \texttt{scripts/fuse\_and\_eval.py}. The resulting CSV tables can be directly included in the report.
+\subsection{Task 3: Best Fusion on Two-Run Combinations (Placeholder)}
+\textit{To be completed:} Select the best fusion method from Task 2 and apply it to all 2-run combinations (MiniLM+TinyBERT, MiniLM+DistilRoBERTa, TinyBERT+DistilRoBERTa). Report metrics and discuss which pair is most complementary.
 
-\section{Task 4 and 5: Query Expansion (Work Plan)}
-We provide scripts for LLM query expansion with and without pseudo-relevance feedback (PRF) based on the method described in the paper ``Query Expansion by Prompting Large Language Models''. We implement:
-\begin{itemize}
-  \item \textbf{Task 4:} Expansion via a chain-of-thought style prompt (\texttt{cot}).
-  \item \textbf{Task 5:} Expansion with PRF context taken from top-ranked candidates (\texttt{cot\_prf}).
-\end{itemize}
+\subsection{Task 4: LLM Query Expansion (Placeholder, Optional)}
+\textit{To be completed:} Generate expanded queries using the ``CoT'' prompting strategy and re-run retrieval/evaluation. Report metrics and discuss when LLM expansion helps or hurts.
 
-\section{Reproducibility}
-All experiments are runnable as Python scripts (no notebooks required). The main entry points are:
-\begin{itemize}
-  \item Fine-tuning: \texttt{scripts/fine\_tune.py}
-  \item Evaluation: \texttt{scripts/evaluate.py}
-  \item Fusion: \texttt{scripts/fuse\_and\_eval.py}
-  \item Query expansion experiments: \texttt{scripts/run\_query\_expansion\_experiments.py}
-\end{itemize}
+\subsection{Task 5: LLM Query Expansion with PRF (Placeholder, Optional)}
+\textit{To be completed:} Augment the prompt with pseudo-relevance feedback passages (PRF) and evaluate. Compare against Task 4 and the non-expanded baseline.
+
+\section{Conclusion}
+Under a one-hour fine-tuning budget, the MSMARCO-pretrained cross-encoder checkpoints (TinyBERT-L-2-v2 and MiniLM-L-2-v2) outperform a DistilRoBERTa baseline on TREC DL'19. The provided script-based pipeline ensures experiments are reproducible and can be extended to fusion (Tasks 2--3) and optional LLM-based query expansion (Tasks 4--5).
 
 \end{document}
