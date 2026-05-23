@@ -12,3 +12,11 @@ runs/
 
 # OS
 .DS_Store
+
+# LaTeX build artifacts
+report/*.aux
+report/*.log
+report/*.out
+report/*.fls
+report/*.fdb_latexmk
+report/*.pdf
