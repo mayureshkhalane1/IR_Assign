@@ -18,7 +18,6 @@ from pathlib import Path
 
 import pandas as pd
 
-
 METRIC_PATTERNS = {
     "ndcg@10": re.compile(r"NDCG@10:\s*([0-9.]+)"),
     "recall@100": re.compile(r"Recall@100:\s*([0-9.]+)"),
@@ -27,14 +26,30 @@ METRIC_PATTERNS = {
 
 
 def run(cmd: list[str]) -> str:
-    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-    if p.returncode != 0:
-        raise RuntimeError(f"Command failed ({p.returncode}): {' '.join(cmd)}\n\n{p.stdout}")
-    return p.stdout
+    """Run a command, stream output to console, and return captured stdout."""
+    print(f"\n$ {' '.join(cmd)}", flush=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+    )
+    assert proc.stdout is not None
+    buf: list[str] = []
+    for line in proc.stdout:
+        print(line, end="", flush=True)
+        buf.append(line)
+    rc = proc.wait()
+    stdout = "".join(buf)
+    if rc != 0:
+        raise RuntimeError(f"Command failed ({rc}): {' '.join(cmd)}\n\n{stdout}")
+    return stdout
 
 
 def parse_metrics(stdout: str) -> dict[str, float]:
-    out = {}
+    out: dict[str, float] = {}
     for k, pat in METRIC_PATTERNS.items():
         m = pat.search(stdout)
         if not m:
@@ -43,7 +58,7 @@ def parse_metrics(stdout: str) -> dict[str, float]:
     return out
 
 
-def main():
+def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--model_dir", required=True, help="Fine-tuned cross-encoder directory")
     ap.add_argument("--ollama_model", default="zephyr-7b-beta")
@@ -52,6 +67,12 @@ def main():
     ap.add_argument("--max_words", type=int, default=32)
     ap.add_argument("--batch_size", type=int, default=64)
     args = ap.parse_args()
+
+    print("[run_query_expansion_experiments] starting", flush=True)
+    print(f"  model_dir: {args.model_dir}", flush=True)
+    print(f"  ollama_model: {args.ollama_model}", flush=True)
+    print(f"  out_dir: {args.out_dir}", flush=True)
+    print(f"  prf_k: {args.prf_k}", flush=True)
 
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -92,7 +113,7 @@ def main():
     )
 
     # 2) Evaluate
-    rows = []
+    rows: list[dict[str, float | str]] = []
     for label, qpath in [("cot", queries_cot), ("cot_prf", queries_cot_prf)]:
         run_path = out_dir / f"expanded_{label}.run"
         stdout = run(
@@ -113,11 +134,12 @@ def main():
         rows.append({"system": label, **metrics})
 
     df = pd.DataFrame(rows).sort_values("ndcg@10", ascending=False)
-    df.to_csv(out_dir / "query_expansion_results.csv", index=False)
+    out_csv = out_dir / "query_expansion_results.csv"
+    df.to_csv(out_csv, index=False)
 
     print("\n## Query expansion results")
     print(df.to_markdown(index=False))
-    print(f"\nSaved: {out_dir / 'query_expansion_results.csv'}")
+    print(f"\nSaved: {out_csv}")
 
 
 if __name__ == "__main__":
