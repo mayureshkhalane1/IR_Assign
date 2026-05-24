@@ -121,11 +121,53 @@ TinyBERT-L-2-v2 achieves the best effectiveness across all metrics, with MiniLM-
 \subsection{Task 3: Best Fusion on Two-Run Combinations (Placeholder)}
 \textit{To be completed:} Select the best fusion method from Task 2 and apply it to all 2-run combinations.
 
-\subsection{Task 4: LLM Query Expansion (Placeholder, Optional)}
-\textit{To be completed:} Generate expanded queries with an LLM prompt and evaluate.
+\subsection{Task 4: LLM Query Expansion (Results, Optional)}
+Table~\ref{tab:task45} reports effectiveness after expanding the TREC DL'19 queries using an LLM prompt (``cot'').
 
-\subsection{Task 5: LLM Query Expansion with PRF (Placeholder, Optional)}
-\textit{To be completed:} Add PRF passages into the prompt, evaluate, and compare.
+\subsection{Task 5: LLM Query Expansion with PRF (Results, Optional)}
+We additionally evaluate an expansion method that augments the prompt with pseudo-relevant passages (PRF) derived from the candidate set (``cot\_prf'').
+
+\begin{table}[t]
+\centering
+\small
+\sisetup{round-mode=places,round-precision=4}
+\begin{tabular}{l S S S}
+\toprule
+System & {NDCG@10} & {Recall@100} & {MAP@1000} \\
+\midrule
+cot     & 0.5490 & 0.4327 & 0.3823 \\
+cot\_prf & 0.3728 & 0.3897 & 0.3113 \\
+\bottomrule
+\end{tabular}
+\caption{Tasks 4--5 query expansion results (TinyBERT reranker).}
+\label{tab:task45}
+\end{table}
+
+\paragraph{Discussion.}
+In our experiments, naive LLM query expansion (cot) did not improve over the baseline TinyBERT run from Task 1 and PRF-augmented expansion (cot\_prf) substantially degraded performance. This suggests that generated expansions may introduce off-topic terms or shift intent away from the original information need. The PRF setting can amplify this effect if the pseudo-relevant passages contain noise or if the prompt encourages overly specific terms that hurt general matching. A practical mitigation would be to constrain expansions (e.g., shorter rewrites, keyword-only outputs, or mixing the original and expanded query) and to tune PRF depth ($k$) and the prompt format.
+
+\begin{figure}[t]
+\centering
+\begin{subfigure}[b]{0.32\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/task45_ndcg@10.pdf}
+  \caption{NDCG@10}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.32\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/task45_recall@100.pdf}
+  \caption{Recall@100}
+\end{subfigure}
+\hfill
+\begin{subfigure}[b]{0.32\linewidth}
+  \centering
+  \includegraphics[width=\linewidth]{figures/task45_map@1000.pdf}
+  \caption{MAP@1000}
+\end{subfigure}
+\caption{Tasks 4--5 query expansion effectiveness (TinyBERT reranker).}
+\label{fig:task45_plots}
+\end{figure}
 
 \section{Conclusion}
 Under a one-hour fine-tuning budget, the MSMARCO-pretrained cross-encoder checkpoints (TinyBERT-L-2-v2 and MiniLM-L-2-v2) outperform DistilRoBERTa on TREC DL'19. The script-based pipeline supports reproducible evaluation, fusion, and optional query expansion.
